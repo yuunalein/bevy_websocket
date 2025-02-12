@@ -5,3 +5,5 @@ edition = "2021"
 
 [dependencies]
 bevy = "0.15"
+parking_lot = "0.12"
+websocket = "0.27"
