@@ -29,10 +29,12 @@ impl Default for WebSocketServerConfig {
     }
 }
 
+type EventQueue = Arc<Mutex<VecDeque<EventKind>>>;
+
 #[derive(Debug, Resource, Default)]
 pub struct WebSocketServer {
     config: Arc<WebSocketServerConfig>,
-    pub msg_queue: Arc<Mutex<VecDeque<WebSocketMessage>>>,
+    pub queue: EventQueue,
 }
 impl WebSocketServer {
     pub fn new(config: WebSocketServerConfig) -> Self {
@@ -49,8 +51,8 @@ impl WebSocketServer {
 
         // Spawn a new thread since the server has to run in background.
         let config = self.config.clone();
-        let msg_queue = self.msg_queue.clone();
-        thread_pool.spawn(serve(server, config, msg_queue)).detach();
+        let queue = self.queue.clone();
+        thread_pool.spawn(serve(server, config, queue)).detach();
 
         Ok(())
     }
@@ -59,15 +61,15 @@ impl WebSocketServer {
 async fn serve(
     server: WsServer<NoTlsAcceptor, TcpListener>,
     config: Arc<WebSocketServerConfig>,
-    msg_queue: Arc<Mutex<VecDeque<WebSocketMessage>>>,
+    queue: EventQueue,
 ) {
     let thread_pool = AsyncComputeTaskPool::get();
 
     for request in server.filter_map(Result::ok) {
         let config = config.clone();
-        let msg_queue = msg_queue.clone();
+        let queue = queue.clone();
         thread_pool
-            .spawn(handle_request(request, config, msg_queue))
+            .spawn(handle_request(request, config, queue))
             .detach();
     }
 }
@@ -75,36 +77,65 @@ async fn serve(
 async fn handle_request(
     request: WsUpgrade<TcpStream, Option<Buffer>>,
     config: Arc<WebSocketServerConfig>,
-    msg_queue: Arc<Mutex<VecDeque<WebSocketMessage>>>,
+    queue: EventQueue,
 ) {
-    handle_request_inner(request, config, msg_queue)
-        .await
-        .unwrap_or_else(|error| error!("WebSocket request handler execution failed - {}", error))
+    match request.tcp_stream().peer_addr() {
+        Ok(peer) => {
+            handle_request_inner(request, config, queue.clone())
+                .await
+                .unwrap_or_else(|error| {
+                    error!("WebSocket request handler execution failed - {}", error);
+                    queue
+                        .lock_arc()
+                        .push_back(EventKind::Close(WebSocketClose { data: None, peer }));
+                });
+        }
+        Err(error) => error!("Failed to establish websocket stream - {error}"),
+    };
 }
 
 async fn handle_request_inner(
     request: WsUpgrade<TcpStream, Option<Buffer>>,
     config: Arc<WebSocketServerConfig>,
-    msg_queue: Arc<Mutex<VecDeque<WebSocketMessage>>>,
+    queue: EventQueue,
 ) -> Result<(), WebSocketError> {
     if !request.protocols().contains(&config.protocol) {
         request.reject().map_err(|(_, e)| e)?;
         return Ok(());
     }
 
-    let mut client = request
+    let client = request
         .use_protocol(&config.protocol)
         .accept()
         .map_err(|(_, e)| e)?;
 
-    info!("New connection from: {}", client.peer_addr()?);
+    let peer = client.peer_addr()?;
+    info!("New connection from: {peer}");
+    queue
+        .lock_arc()
+        .push_back(EventKind::Open(WebSocketOpen { peer }));
 
-    for msg in client.incoming_messages() {
+    let (mut receiver, mut sender) = client.split()?;
+
+    for msg in receiver.incoming_messages() {
         let msg = msg?;
 
-        if let OwnedMessage::Text(data) = msg {
-            msg_queue.lock().push_back(WebSocketMessage { data });
-        }
+        match msg {
+            OwnedMessage::Text(data) => queue
+                .lock_arc()
+                .push_back(EventKind::Message(WebSocketMessage { data, peer })),
+            OwnedMessage::Binary(data) => queue
+                .lock_arc()
+                .push_back(EventKind::Binary(WebSocketBinary { data, peer })),
+            OwnedMessage::Close(data) => {
+                queue
+                    .lock_arc()
+                    .push_back(EventKind::Close(WebSocketClose { data, peer }));
+                return Ok(());
+            }
+            OwnedMessage::Ping(ping) => sender.send_message(&OwnedMessage::Pong(ping))?,
+            _ => (),
+        };
     }
 
     Ok(())
