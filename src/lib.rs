@@ -2,17 +2,21 @@
 
 pub mod events;
 mod server;
+pub mod writer;
 
 use bevy::prelude::*;
 use events::*;
 use server::*;
 
 pub use server::WebSocketServerConfig;
+use writer::{SenderMap, WebSocketWriter};
 
 pub struct WebSocketPlugin;
 impl Plugin for WebSocketPlugin {
     fn build(&self, app: &mut App) {
-        build(app.init_resource::<WebSocketServer>());
+        let map: SenderMap = Default::default();
+        build(app.insert_resource(WebSocketServer::new(Default::default(), map.clone())))
+            .insert_resource(WebSocketWriter::new(map));
     }
 }
 
@@ -24,17 +28,19 @@ impl CustomWebSocketPlugin {
 }
 impl Plugin for CustomWebSocketPlugin {
     fn build(&self, app: &mut App) {
-        build(app.insert_resource(WebSocketServer::new(self.0.clone())));
+        let map: SenderMap = Default::default();
+        build(app.insert_resource(WebSocketServer::new(self.0.clone(), map.clone())))
+            .insert_resource(WebSocketWriter::new(map));
     }
 }
 
-fn build(app: &mut App) {
+fn build(app: &mut App) -> &mut App {
     app.add_event::<WebSocketMessage>()
         .add_event::<WebSocketBinary>()
         .add_event::<WebSocketOpen>()
         .add_event::<WebSocketClose>()
         .add_systems(Startup, run_ws_server)
-        .add_systems(Update, push_events);
+        .add_systems(Update, push_events)
 }
 
 fn run_ws_server(mut server: ResMut<WebSocketServer>) {

@@ -13,7 +13,7 @@ use websocket::{
     OwnedMessage, WebSocketError,
 };
 
-use crate::events::*;
+use crate::{events::*, writer::SenderMap};
 
 #[derive(Debug, Clone)]
 pub struct WebSocketServerConfig {
@@ -31,16 +31,18 @@ impl Default for WebSocketServerConfig {
 
 type EventQueue = Arc<Mutex<VecDeque<EventKind>>>;
 
-#[derive(Debug, Resource, Default)]
+#[derive(Resource)]
 pub struct WebSocketServer {
     config: Arc<WebSocketServerConfig>,
     pub queue: EventQueue,
+    pub sender_map: SenderMap,
 }
 impl WebSocketServer {
-    pub fn new(config: WebSocketServerConfig) -> Self {
+    pub fn new(config: WebSocketServerConfig, sender_map: SenderMap) -> Self {
         Self {
             config: Arc::new(config),
-            ..Default::default()
+            sender_map,
+            queue: Default::default(),
         }
     }
 
@@ -52,7 +54,10 @@ impl WebSocketServer {
         // Spawn a new thread since the server has to run in background.
         let config = self.config.clone();
         let queue = self.queue.clone();
-        thread_pool.spawn(serve(server, config, queue)).detach();
+        let sender_map = self.sender_map.clone();
+        thread_pool
+            .spawn(serve(server, config, queue, sender_map))
+            .detach();
 
         Ok(())
     }
@@ -62,14 +67,16 @@ async fn serve(
     server: WsServer<NoTlsAcceptor, TcpListener>,
     config: Arc<WebSocketServerConfig>,
     queue: EventQueue,
+    sender_map: SenderMap,
 ) {
     let thread_pool = AsyncComputeTaskPool::get();
 
     for request in server.filter_map(Result::ok) {
         let config = config.clone();
         let queue = queue.clone();
+        let sender_map = sender_map.clone();
         thread_pool
-            .spawn(handle_request(request, config, queue))
+            .spawn(handle_request(request, config, queue, sender_map))
             .detach();
     }
 }
@@ -78,10 +85,11 @@ async fn handle_request(
     request: WsUpgrade<TcpStream, Option<Buffer>>,
     config: Arc<WebSocketServerConfig>,
     queue: EventQueue,
+    sender_map: SenderMap,
 ) {
     match request.tcp_stream().peer_addr() {
         Ok(peer) => {
-            handle_request_inner(request, config, queue.clone())
+            handle_request_inner(request, config, queue.clone(), sender_map)
                 .await
                 .unwrap_or_else(|error| {
                     error!("WebSocket request handler execution failed - {}", error);
@@ -98,6 +106,7 @@ async fn handle_request_inner(
     request: WsUpgrade<TcpStream, Option<Buffer>>,
     config: Arc<WebSocketServerConfig>,
     queue: EventQueue,
+    sender_map: SenderMap,
 ) -> Result<(), WebSocketError> {
     if !request.protocols().contains(&config.protocol) {
         request.reject().map_err(|(_, e)| e)?;
@@ -111,11 +120,13 @@ async fn handle_request_inner(
 
     let peer = client.peer_addr()?;
     info!("New connection from: {peer}");
+    let (mut receiver, sender) = client.split()?;
+    let sender = Arc::new(Mutex::new(sender));
+
+    sender_map.lock_arc().insert(peer, sender.clone());
     queue
         .lock_arc()
         .push_back(EventKind::Open(WebSocketOpen { peer }));
-
-    let (mut receiver, mut sender) = client.split()?;
 
     for msg in receiver.incoming_messages() {
         let msg = msg?;
@@ -133,7 +144,7 @@ async fn handle_request_inner(
                     .push_back(EventKind::Close(WebSocketClose { data, peer }));
                 return Ok(());
             }
-            OwnedMessage::Ping(ping) => sender.send_message(&OwnedMessage::Pong(ping))?,
+            OwnedMessage::Ping(ping) => sender.lock().send_message(&OwnedMessage::Pong(ping))?,
             _ => (),
         };
     }
