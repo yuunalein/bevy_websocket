@@ -89,13 +89,14 @@ async fn handle_request(
 ) {
     match request.tcp_stream().peer_addr() {
         Ok(peer) => {
-            handle_request_inner(request, config, queue.clone(), sender_map)
+            handle_request_inner(request, config, queue.clone(), sender_map.clone())
                 .await
                 .unwrap_or_else(|error| {
                     error!("WebSocket request handler execution failed - {}", error);
                     queue
                         .lock_arc()
                         .push_back(EventKind::Close(WebSocketClose { data: None, peer }));
+                    sender_map.lock_arc().remove(&peer);
                 });
         }
         Err(error) => error!("Failed to establish websocket stream - {error}"),
@@ -142,6 +143,7 @@ async fn handle_request_inner(
                 queue
                     .lock_arc()
                     .push_back(EventKind::Close(WebSocketClose { data, peer }));
+                sender_map.lock_arc().remove(&peer);
                 return Ok(());
             }
             OwnedMessage::Ping(ping) => sender.lock().send_message(&OwnedMessage::Pong(ping))?,
