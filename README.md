@@ -10,12 +10,23 @@ A WebSocket server that runs in bevy.
 2. Add `bevy_websocket::WebSocketPlugin` to your bevy `App`
 3. Receive messages with `EventReader<WebSocketMessage>` or send any with `ResMut<WebSocketWriter>`
 
-### Example
+### Examples
+
+Run the `messenger` example to see the crate in action.
+
+```shell
+cargo run --example messenger
+```
+
+Or implement this code in your project.
 
 ```rust
+use bevy::prelude::*;
+use bevy_websocket::prelude::*;
+
 fn main() {
     App::new()
-        .add_plugins(WebSocketPlugin)
+        .add_plugins((MinimalPlugins, WebSocketPlugin))
         .add_systems(Update, on_message)
         .run();
 }

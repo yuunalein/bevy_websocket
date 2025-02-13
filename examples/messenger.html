@@ -1,0 +1,190 @@
+<head>
+	<style>
+		body {
+			font-family: Helvetica, Arial, sans-serif;
+			display: flex;
+			justify-content: center;
+			margin: 0;
+		}
+
+		.content {
+			max-width: 800px;
+			width: 100%;
+			height: 100vh;
+			display: flex;
+			flex-direction: column;
+		}
+
+		form {
+			background-color: rgb(242, 242, 247);
+			display: grid;
+			padding: 16px;
+			gap: 8px;
+			border-radius: 12px;
+		}
+
+		input {
+			padding: 8px;
+		}
+
+		input[type="submit"] {
+			background-color: rgb(0, 122, 230);
+			color: white;
+			font-weight: bold;
+			border: none;
+			border-radius: 8px;
+			outline: none;
+			max-width: 260px;
+			width: 100%;
+		}
+
+		.center {
+			display: flex;
+			justify-content: center;
+			align-items: center;
+		}
+
+		#overlay {
+			position: absolute;
+			left: 0;
+			top: 0;
+			width: 100vw;
+			height: 100vh;
+			background-color: rgba(0, 0, 0, 0.2);
+			display: flex;
+			justify-content: center;
+			z-index: 2;
+		}
+
+		.chat {
+			display: flex;
+			flex-direction: column;
+			width: 100%;
+			flex: 1;
+		}
+
+		.wrapper {
+			flex: 1;
+			position: relative;
+		}
+
+		.wrapper > div {
+			position: absolute;
+			left: 0;
+			top: 0;
+			right: 0;
+			bottom: 0;
+			display: flex;
+			flex-direction: column;
+			justify-content: flex-end;
+		}
+
+		#list {
+			line-break: anywhere;
+			overflow-x: hidden;
+			overflow-y: auto;
+			list-style: none;
+		}
+
+		#input-form {
+			grid-template-columns: auto min-content min-content;
+			grid-template-rows: 1fr;
+			flex: 0;
+		}
+	</style>
+</head>
+<body>
+	<div id="overlay">
+		<div class="content">
+			<form id="login-form">
+				<h2>Login</h2>
+				<label for="url">URL</label>
+				<input
+					name="url"
+					placeholder="ws://"
+					value="ws://localhost:2794"
+					type="url"
+					required
+				/>
+				<label for="name">Username</label>
+				<input name="name" placeholder="Your name" type="text" required />
+				<div class="center">
+					<input type="submit" />
+				</div>
+			</form>
+		</div>
+	</div>
+	<div class="content">
+		<h1>Bevy WebSocket Messenger</h1>
+		<div class="chat">
+			<div class="wrapper">
+				<div>
+					<ul id="list"></ul>
+				</div>
+			</div>
+			<form id="input-form">
+				<input id="message-input" name="text" type="text" placeholder="Message" required />
+				<input type="submit" />
+				<input name="exit" type="submit" value="exit" formnovalidate />
+			</form>
+		</div>
+	</div>
+	<script>
+		/**
+		 * @type WebSocket | undefined
+		 */
+		let websocket = undefined;
+
+		const overlay = document.getElementById("overlay");
+		const input = document.getElementById("message-input");
+
+		document.getElementById("login-form").addEventListener("submit", (event) => {
+			event.preventDefault();
+
+			const data = new FormData(event.srcElement);
+			const ws = new WebSocket(data.get("url"), "bevy_websocket");
+			ws.onmessage = (event) => {
+				if (event.data === "$$hello$$") {
+					setupChat(ws);
+					ws.send(`$$auth$$${data.get("name")}`);
+					overlay.style.display = "none";
+					input.focus();
+				}
+			};
+		});
+
+		/**
+		 * @param {WebSocket} ws
+		 */
+		function setupChat(ws) {
+			const list = document.getElementById("list");
+
+			ws.onmessage = (event) => {
+				let element = document.createElement("li");
+				element.innerText = event.data;
+				list.appendChild(element);
+				list.scrollTop = list.scrollHeight;
+			};
+
+			ws.onclose = (event) => {
+				websocket = undefined;
+				overlay.removeAttribute("style");
+			};
+
+			websocket = ws;
+		}
+
+		document.getElementById("input-form").addEventListener("submit", (event) => {
+			event.preventDefault();
+
+			const data = new FormData(event.srcElement);
+
+			if (event.submitter.getAttribute("name") === "exit") {
+				websocket?.close();
+			} else {
+				websocket?.send(data.get("text"));
+				event.srcElement.reset();
+			}
+		});
+	</script>
+</body>
