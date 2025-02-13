@@ -17,7 +17,7 @@ pub enum SendError {
     FailedToCloseStream,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct WebSocketWriter {
     map: SenderMap,
 }
