@@ -4,6 +4,12 @@ pub mod events;
 mod server;
 pub mod writer;
 
+pub mod prelude {
+    pub use crate::events::*;
+    pub use crate::writer::*;
+    pub use crate::{CustomWebSocketPlugin, WebSocketPlugin, WebSocketServerConfig};
+}
+
 use bevy::prelude::*;
 use events::*;
 use server::*;
