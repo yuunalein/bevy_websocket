@@ -5,7 +5,13 @@ use std::{
     sync::Arc,
 };
 
-use bevy::{prelude::*, tasks::AsyncComputeTaskPool};
+use bevy::{
+    prelude::*,
+    tasks::{
+        futures_lite::future::{self, yield_now},
+        AsyncComputeTaskPool,
+    },
+};
 use parking_lot::Mutex;
 use websocket::{
     server::{upgrade::WsUpgrade, NoTlsAcceptor, WsServer},
@@ -71,13 +77,28 @@ async fn serve(
 ) {
     let thread_pool = AsyncComputeTaskPool::get();
 
-    for request in server.filter_map(Result::ok) {
-        let config = config.clone();
-        let queue = queue.clone();
-        let sender_map = sender_map.clone();
-        thread_pool
-            .spawn(handle_request(request, config, queue, sender_map))
-            .detach();
+    let mut requests = server.filter_map(Result::ok);
+    loop {
+        if let Some(request) = requests.next() {
+            let config = config.clone();
+            let queue = queue.clone();
+            let sender_map = sender_map.clone();
+            let mut handle = thread_pool.spawn(handle_request(request, config, queue, sender_map));
+
+            thread_pool
+                .spawn(async move {
+                    loop {
+                        if future::poll_once(&mut handle).await.is_some() {
+                            break;
+                        }
+
+                        yield_now().await;
+                    }
+                })
+                .detach();
+        }
+
+        yield_now().await;
     }
 }
 
