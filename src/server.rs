@@ -1,3 +1,4 @@
+use std::thread::spawn;
 use std::{
     collections::VecDeque,
     io,
@@ -5,13 +6,8 @@ use std::{
     sync::Arc,
 };
 
-use bevy::{
-    prelude::*,
-    tasks::{
-        futures_lite::future::{self, yield_now},
-        AsyncComputeTaskPool,
-    },
-};
+use bevy::prelude::*;
+use bevy::tasks::futures_lite::future;
 use parking_lot::Mutex;
 use websocket::{
     server::{upgrade::WsUpgrade, NoTlsAcceptor, WsServer},
@@ -48,22 +44,19 @@ impl WebSocketServer {
         Self {
             config: Arc::new(config),
             sender_map,
-            queue: Default::default(),
+            queue: default(),
         }
     }
 
     pub fn run(&mut self) -> io::Result<()> {
         let server = Server::bind(self.config.addr)?;
         info!("Server running at ws://{}", self.config.addr);
-        let thread_pool = AsyncComputeTaskPool::get();
 
-        // Spawn a new thread since the server has to run in background.
         let config = self.config.clone();
         let queue = self.queue.clone();
         let sender_map = self.sender_map.clone();
-        thread_pool
-            .spawn(serve(server, config, queue, sender_map))
-            .detach();
+
+        spawn(move || future::block_on(serve(server, config, queue, sender_map)));
 
         Ok(())
     }
@@ -75,30 +68,12 @@ async fn serve(
     queue: EventQueue,
     sender_map: SenderMap,
 ) {
-    let thread_pool = AsyncComputeTaskPool::get();
+    for request in server.filter_map(Result::ok) {
+        let config = config.clone();
+        let queue = queue.clone();
+        let sender_map = sender_map.clone();
 
-    let mut requests = server.filter_map(Result::ok);
-    loop {
-        if let Some(request) = requests.next() {
-            let config = config.clone();
-            let queue = queue.clone();
-            let sender_map = sender_map.clone();
-            let mut handle = thread_pool.spawn(handle_request(request, config, queue, sender_map));
-
-            thread_pool
-                .spawn(async move {
-                    loop {
-                        if future::poll_once(&mut handle).await.is_some() {
-                            break;
-                        }
-
-                        yield_now().await;
-                    }
-                })
-                .detach();
-        }
-
-        yield_now().await;
+        spawn(move || future::block_on(handle_request(request, config, queue, sender_map)));
     }
 }
 
