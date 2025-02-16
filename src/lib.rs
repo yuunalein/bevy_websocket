@@ -8,7 +8,7 @@ pub mod prelude {
     pub use crate::events::*;
     pub use crate::server::*;
     pub use crate::writer::*;
-    pub use crate::{CustomWebSocketPlugin, WebSocketPlugin};
+    pub use crate::WebSocketPlugin;
 }
 
 use bevy::prelude::*;
@@ -22,13 +22,13 @@ impl Plugin for WebSocketPlugin {
         install_websocket_server(app, WebSocketServerConfig::default());
     }
 }
-
-pub struct CustomWebSocketPlugin(WebSocketServerConfig);
-impl CustomWebSocketPlugin {
-    pub fn new(config: WebSocketServerConfig) -> Self {
-        Self(config)
+impl WebSocketPlugin {
+    pub fn custom(config: WebSocketServerConfig) -> CustomWebSocketPlugin {
+        CustomWebSocketPlugin(config)
     }
 }
+
+pub struct CustomWebSocketPlugin(WebSocketServerConfig);
 impl Plugin for CustomWebSocketPlugin {
     fn build(&self, app: &mut App) {
         install_websocket_server(app, self.0.clone());
