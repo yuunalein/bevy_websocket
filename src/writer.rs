@@ -17,4 +17,8 @@ impl WebSocketWriter<'_> {
     pub fn send_binary(&mut self, data: Vec<u8>) -> Result<(), WebSocketError> {
         self.sender.send_message(&OwnedMessage::Binary(data))
     }
+
+    pub fn send_ping(&mut self, data: Vec<u8>) -> Result<(), WebSocketError> {
+        self.sender.send_message(&OwnedMessage::Ping(data))
+    }
 }

@@ -94,6 +94,7 @@ pub(crate) fn install_websocket_server(app: &mut App, config: WebSocketServerCon
         .init_resource::<WebSocketClients>()
         .add_event::<WebSocketMessageEvent>()
         .add_event::<WebSocketBinaryEvent>()
+        .add_event::<WebSocketPongEvent>()
         .add_event::<WebSocketOpenEvent>()
         .add_event::<WebSocketCloseEvent>()
         .add_systems(Update, (handle_request, handle_client))
@@ -179,6 +180,7 @@ fn handle_client(
     mut requests: ResMut<WebSocketClients>,
     mut message_w: EventWriter<WebSocketMessageEvent>,
     mut binary_w: EventWriter<WebSocketBinaryEvent>,
+    mut pong_w: EventWriter<WebSocketPongEvent>,
     mut close_w: EventWriter<WebSocketCloseEvent>,
 ) {
     if let Some((peer, request)) = requests.next() {
@@ -192,21 +194,23 @@ fn handle_client(
                 OwnedMessage::Binary(data) => {
                     binary_w.send(WebSocketBinaryEvent { data, peer });
                 }
-                OwnedMessage::Close(data) => {
-                    close_w.send(WebSocketCloseEvent { data, peer });
-
-                    requests.inner.swap_remove(&peer);
-                }
-                OwnedMessage::Ping(ping) => {
+                OwnedMessage::Ping(data) => {
                     if request
                         .sender
-                        .send_message(&OwnedMessage::Pong(ping))
+                        .send_message(&OwnedMessage::Pong(data))
                         .is_err()
                     {
                         error!("Failed to reply to ping.");
                     }
                 }
-                _ => (),
+                OwnedMessage::Pong(data) => {
+                    pong_w.send(WebSocketPongEvent { data, peer });
+                }
+                OwnedMessage::Close(data) => {
+                    close_w.send(WebSocketCloseEvent { data, peer });
+
+                    requests.inner.swap_remove(&peer);
+                }
             };
         }
     }

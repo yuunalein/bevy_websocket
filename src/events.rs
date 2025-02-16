@@ -16,6 +16,12 @@ pub struct WebSocketBinaryEvent {
 }
 
 #[derive(Event, Debug)]
+pub struct WebSocketPongEvent {
+    pub data: Vec<u8>,
+    pub peer: SocketAddr,
+}
+
+#[derive(Event, Debug)]
 pub struct WebSocketOpenEvent {
     pub peer: SocketAddr,
 }
