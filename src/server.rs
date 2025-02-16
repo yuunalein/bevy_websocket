@@ -28,13 +28,15 @@ use crate::writer::WebSocketWriter;
 #[derive(Resource, Clone)]
 pub struct WebSocketServerConfig {
     pub addr: SocketAddr,
-    pub protocol: String,
+    pub parsed_protocol: String,
+    pub raw_protocol: String,
 }
 impl Default for WebSocketServerConfig {
     fn default() -> Self {
         Self {
             addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0)),
-            protocol: "bevy_websocket".to_string(),
+            parsed_protocol: "bevy_websocket".to_string(),
+            raw_protocol: "bevy_websocket_raw".to_string(),
         }
     }
 }
@@ -47,6 +49,13 @@ struct RequestQueue(RequestQueueInner);
 struct Client {
     sender: Writer<TcpStream>,
     receiver: Reader<TcpStream>,
+    mode: WebSocketClientMode,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum WebSocketClientMode {
+    Parsed,
+    Raw,
 }
 
 #[derive(Resource, Default)]
@@ -56,8 +65,14 @@ pub struct WebSocketClients {
 }
 impl WebSocketClients {
     pub fn write(&mut self, target: &WebSocketPeer) -> Option<WebSocketWriter> {
-        self.inner.get_mut(target).map(|req| WebSocketWriter {
-            sender: &mut req.sender,
+        self.inner.get_mut(target).map(|client| WebSocketWriter {
+            sender: &mut client.sender,
+        })
+    }
+
+    pub fn set_mode(&mut self, target: &WebSocketPeer, mode: WebSocketClientMode) -> Option<()> {
+        self.inner.get_mut(target).map(|client| {
+            client.mode = mode;
         })
     }
 
@@ -100,6 +115,7 @@ pub(crate) fn install_websocket_server(app: &mut App, config: WebSocketServerCon
         .add_event::<WebSocketMessageEvent>()
         .add_event::<WebSocketBinaryEvent>()
         .add_event::<WebSocketPongEvent>()
+        .add_event::<WebSocketRawEvent>()
         .add_event::<WebSocketOpenEvent>()
         .add_event::<WebSocketCloseEvent>()
         .add_systems(Update, (handle_request, handle_client))
@@ -140,20 +156,25 @@ fn listen(config: WebSocketServerConfig, queue: RequestQueueInner) {
 
 fn handle_request_inner(
     request_queue: Res<RequestQueue>,
-    mut requests: ResMut<WebSocketClients>,
+    mut clients: ResMut<WebSocketClients>,
     config: Res<WebSocketServerConfig>,
     mut open_w: EventWriter<WebSocketOpenEvent>,
 ) -> Result<(), io::Error> {
     if !request_queue.0.is_locked() {
         let mut queue = request_queue.clone().lock_arc();
         if let Some(request) = queue.pop_front() {
-            if !request.protocols().contains(&config.protocol) {
+            let protocols = request.protocols();
+            let (mode, protocol) = if protocols.contains(&config.parsed_protocol) {
+                (WebSocketClientMode::Parsed, &config.parsed_protocol)
+            } else if protocols.contains(&config.raw_protocol) {
+                (WebSocketClientMode::Raw, &config.raw_protocol)
+            } else {
                 request.reject().map_err(|(_, e)| e)?;
                 return Ok(());
-            }
+            };
 
             let client = request
-                .use_protocol(&config.protocol)
+                .use_protocol(protocol)
                 .accept()
                 .map_err(|(_, e)| e)?;
 
@@ -161,9 +182,16 @@ fn handle_request_inner(
             info!("New connection from: {}", peer);
             let (receiver, sender) = client.split()?;
 
-            open_w.send(WebSocketOpenEvent { peer });
+            open_w.send(WebSocketOpenEvent { peer, mode });
 
-            requests.inner.insert(peer, Client { sender, receiver });
+            clients.inner.insert(
+                peer,
+                Client {
+                    sender,
+                    receiver,
+                    mode,
+                },
+            );
         }
     }
 
@@ -172,51 +200,61 @@ fn handle_request_inner(
 
 fn handle_request(
     request_queue: Res<RequestQueue>,
-    requests: ResMut<WebSocketClients>,
+    clients: ResMut<WebSocketClients>,
     config: Res<WebSocketServerConfig>,
     open_w: EventWriter<WebSocketOpenEvent>,
 ) {
-    if let Err(error) = handle_request_inner(request_queue, requests, config, open_w) {
+    if let Err(error) = handle_request_inner(request_queue, clients, config, open_w) {
         error!("Failed to get request. - {error}");
     }
 }
 
 fn handle_client(
-    mut requests: ResMut<WebSocketClients>,
+    mut clients: ResMut<WebSocketClients>,
     mut message_w: EventWriter<WebSocketMessageEvent>,
     mut binary_w: EventWriter<WebSocketBinaryEvent>,
     mut pong_w: EventWriter<WebSocketPongEvent>,
+    mut data_w: EventWriter<WebSocketRawEvent>,
     mut close_w: EventWriter<WebSocketCloseEvent>,
 ) {
-    if let Some((peer, request)) = requests.next() {
-        if let Ok(msg) = request.receiver.recv_message() {
-            let peer = *peer;
+    if let Some((peer, client)) = clients.next() {
+        let peer = *peer;
 
-            match msg {
-                OwnedMessage::Text(data) => {
-                    message_w.send(WebSocketMessageEvent { data, peer });
-                }
-                OwnedMessage::Binary(data) => {
-                    binary_w.send(WebSocketBinaryEvent { data, peer });
-                }
-                OwnedMessage::Ping(data) => {
-                    if request
-                        .sender
-                        .send_message(&OwnedMessage::Pong(data))
-                        .is_err()
-                    {
-                        error!("Failed to reply to ping.");
-                    }
-                }
-                OwnedMessage::Pong(data) => {
-                    pong_w.send(WebSocketPongEvent { data, peer });
-                }
-                OwnedMessage::Close(data) => {
-                    requests.inner.swap_remove(&peer);
+        match client.mode {
+            WebSocketClientMode::Parsed => {
+                if let Ok(msg) = client.receiver.recv_message() {
+                    match msg {
+                        OwnedMessage::Text(data) => {
+                            message_w.send(WebSocketMessageEvent { data, peer });
+                        }
+                        OwnedMessage::Binary(data) => {
+                            binary_w.send(WebSocketBinaryEvent { data, peer });
+                        }
+                        OwnedMessage::Ping(data) => {
+                            if client
+                                .sender
+                                .send_message(&OwnedMessage::Pong(data))
+                                .is_err()
+                            {
+                                error!("Failed to reply to ping.");
+                            }
+                        }
+                        OwnedMessage::Pong(data) => {
+                            pong_w.send(WebSocketPongEvent { data, peer });
+                        }
+                        OwnedMessage::Close(data) => {
+                            clients.inner.swap_remove(&peer);
 
-                    close_w.send(WebSocketCloseEvent { data, peer });
+                            close_w.send(WebSocketCloseEvent { data, peer });
+                        }
+                    };
                 }
-            };
+            }
+            WebSocketClientMode::Raw => {
+                if let Ok(data) = client.receiver.recv_dataframe() {
+                    data_w.send(WebSocketRawEvent { data, peer });
+                }
+            }
         }
     }
 }

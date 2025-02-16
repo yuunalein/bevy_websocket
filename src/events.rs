@@ -1,9 +1,13 @@
 use bevy::prelude::*;
-pub use websocket::CloseData;
+pub use websocket::{
+    dataframe::{DataFrame, Opcode},
+    CloseData,
+};
 
 use crate::{
     server::{WebSocketClients, WebSocketPeer},
     writer::WebSocketWriter,
+    WebSocketClientMode,
 };
 
 macro_rules! impl_reply {
@@ -14,6 +18,14 @@ macro_rules! impl_reply {
                 clients: &'c mut WebSocketClients,
             ) -> Option<WebSocketWriter<'c>> {
                 self.peer.write(clients)
+            }
+
+            pub fn set_mode(
+                &self,
+                clients: &mut WebSocketClients,
+                mode: WebSocketClientMode,
+            ) -> Option<()> {
+                clients.set_mode(&self.peer, mode)
             }
         }
     };
@@ -28,7 +40,8 @@ impl_reply!(
     WebSocketMessageEvent,
     WebSocketBinaryEvent,
     WebSocketPongEvent,
-    WebSocketOpenEvent
+    WebSocketOpenEvent,
+    WebSocketRawEvent
 );
 
 #[derive(Event, Debug)]
@@ -50,8 +63,15 @@ pub struct WebSocketPongEvent {
 }
 
 #[derive(Event, Debug)]
+pub struct WebSocketRawEvent {
+    pub data: DataFrame,
+    pub peer: WebSocketPeer,
+}
+
+#[derive(Event, Debug)]
 pub struct WebSocketOpenEvent {
     pub peer: WebSocketPeer,
+    pub mode: WebSocketClientMode,
 }
 
 #[derive(Event, Debug)]
