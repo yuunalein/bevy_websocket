@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::fmt::Display;
 
+use std::net::AddrParseError;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -104,7 +106,7 @@ impl WebSocketClients {
 ///
 /// Wraps a [SocketAddr].
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Deref, DerefMut)]
-pub struct WebSocketPeer(SocketAddr);
+pub struct WebSocketPeer(pub SocketAddr);
 impl WebSocketPeer {
     /// Create a [`WebSocketWriter`] for the client corresponding to this [`WebSocketPeer`].
     ///
@@ -122,6 +124,13 @@ impl WebSocketPeer {
         mode: WebSocketClientMode,
     ) -> Option<()> {
         clients.set_mode(self, mode)
+    }
+}
+impl FromStr for WebSocketPeer {
+    type Err = AddrParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(SocketAddr::from_str(s)?))
     }
 }
 impl Display for WebSocketPeer {
