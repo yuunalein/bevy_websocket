@@ -1,23 +1,31 @@
-use std::thread::spawn;
+use std::collections::VecDeque;
+use std::ops::Deref;
+
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use std::{
-    collections::VecDeque,
     io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
-    sync::Arc,
 };
 
 use bevy::prelude::*;
-use bevy::tasks::futures_lite::future;
+use indexmap::IndexMap;
 use parking_lot::Mutex;
+use websocket::server::upgrade::WsUpgrade;
+use websocket::sync::server::upgrade::Buffer;
+use websocket::sync::server::HyperIntoWsError;
+use websocket::sync::{Reader, Writer};
 use websocket::{
-    server::{upgrade::WsUpgrade, NoTlsAcceptor, WsServer},
-    sync::{server::upgrade::Buffer, Server},
-    OwnedMessage, WebSocketError,
+    server::{NoTlsAcceptor, WsServer},
+    sync::Server,
+    OwnedMessage,
 };
 
-use crate::{events::*, writer::SenderMap};
+use crate::events::*;
+use crate::writer::WebSocketWriter;
 
-#[derive(Debug, Clone)]
+#[derive(Resource, Clone)]
 pub struct WebSocketServerConfig {
     pub addr: SocketAddr,
     pub protocol: String,
@@ -31,121 +39,175 @@ impl Default for WebSocketServerConfig {
     }
 }
 
-type EventQueue = Arc<Mutex<VecDeque<EventKind>>>;
+type RequestQueueInner = Arc<Mutex<VecDeque<WsUpgrade<TcpStream, Option<Buffer>>>>>;
 
-#[derive(Resource)]
-pub struct WebSocketServer {
-    config: Arc<WebSocketServerConfig>,
-    pub queue: EventQueue,
-    pub sender_map: SenderMap,
+#[derive(Resource, Default)]
+struct RequestQueue(RequestQueueInner);
+impl Deref for RequestQueue {
+    type Target = RequestQueueInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
-impl WebSocketServer {
-    pub fn new(config: WebSocketServerConfig, sender_map: SenderMap) -> Self {
-        Self {
-            config: Arc::new(config),
-            sender_map,
-            queue: default(),
+
+struct Client {
+    sender: Writer<TcpStream>,
+    receiver: Reader<TcpStream>,
+}
+
+#[derive(Resource, Default)]
+pub struct Clients {
+    iter_index: usize,
+    inner: IndexMap<SocketAddr, Client>,
+}
+impl Clients {
+    pub fn write(&mut self, target: &SocketAddr) -> Option<WebSocketWriter> {
+        self.inner.get_mut(target).map(|req| WebSocketWriter {
+            sender: &mut req.sender,
+        })
+    }
+}
+impl Clients {
+    fn next(&mut self) -> Option<(&SocketAddr, &mut Client)> {
+        if self.inner.is_empty() {
+            return None;
         }
-    }
 
-    pub fn run(&mut self) -> io::Result<()> {
-        let server = Server::bind(self.config.addr)?;
-        info!("Server running at ws://{}", self.config.addr);
-
-        let config = self.config.clone();
-        let queue = self.queue.clone();
-        let sender_map = self.sender_map.clone();
-
-        spawn(move || future::block_on(serve(server, config, queue, sender_map)));
-
-        Ok(())
+        self.iter_index = (self.iter_index + 1) % self.inner.len();
+        self.inner.get_index_mut(self.iter_index)
     }
 }
 
-async fn serve(
-    server: WsServer<NoTlsAcceptor, TcpListener>,
-    config: Arc<WebSocketServerConfig>,
-    queue: EventQueue,
-    sender_map: SenderMap,
-) {
-    for request in server.filter_map(Result::ok) {
-        let config = config.clone();
+pub(crate) fn install_websocket_server(app: &mut App, config: WebSocketServerConfig) -> &mut App {
+    let queue = RequestQueue::default();
+
+    {
         let queue = queue.clone();
-        let sender_map = sender_map.clone();
+        let config = config.clone();
 
-        spawn(move || future::block_on(handle_request(request, config, queue, sender_map)));
+        thread::spawn(move || listen(config, queue));
     }
+
+    app.insert_resource(config)
+        .insert_resource(queue)
+        .init_resource::<Clients>()
+        .add_event::<WebSocketMessage>()
+        .add_event::<WebSocketBinary>()
+        .add_event::<WebSocketOpen>()
+        .add_event::<WebSocketClose>()
+        .add_systems(Update, (handle_request, handle_client))
 }
 
-async fn handle_request(
-    request: WsUpgrade<TcpStream, Option<Buffer>>,
-    config: Arc<WebSocketServerConfig>,
-    queue: EventQueue,
-    sender_map: SenderMap,
-) {
-    match request.tcp_stream().peer_addr() {
-        Ok(peer) => {
-            handle_request_inner(request, config, queue.clone(), sender_map.clone())
-                .await
-                .unwrap_or_else(|error| {
-                    error!("WebSocket request handler execution failed - {}", error);
-                    queue
-                        .lock_arc()
-                        .push_back(EventKind::Close(WebSocketClose { data: None, peer }));
-                    sender_map.lock_arc().remove(&peer);
-                });
+fn start_server(
+    config: WebSocketServerConfig,
+) -> Result<WsServer<NoTlsAcceptor, TcpListener>, io::Error> {
+    let server = Server::bind(config.addr)?;
+    info!("Server running at ws://{}", server.local_addr()?);
+    server.set_nonblocking(true)?;
+
+    Ok(server)
+}
+
+fn listen(config: WebSocketServerConfig, queue: RequestQueueInner) {
+    let server = match start_server(config) {
+        Ok(server) => server,
+        Err(error) => {
+            error!("Failed to start websocket server. - {}", error);
+            return;
         }
-        Err(error) => error!("Failed to establish websocket stream - {error}"),
     };
+
+    for request in server.into_iter() {
+        match request {
+            Ok(req) => queue.lock_arc().push_back(req),
+            Err(e) => {
+                if let HyperIntoWsError::Io(ref e) = e.error {
+                    if e.kind() == io::ErrorKind::WouldBlock {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                }
+            }
+        };
+    }
 }
 
-async fn handle_request_inner(
-    request: WsUpgrade<TcpStream, Option<Buffer>>,
-    config: Arc<WebSocketServerConfig>,
-    queue: EventQueue,
-    sender_map: SenderMap,
-) -> Result<(), WebSocketError> {
-    if !request.protocols().contains(&config.protocol) {
-        request.reject().map_err(|(_, e)| e)?;
-        return Ok(());
-    }
-
-    let client = request
-        .use_protocol(&config.protocol)
-        .accept()
-        .map_err(|(_, e)| e)?;
-
-    let peer = client.peer_addr()?;
-    info!("New connection from: {peer}");
-    let (mut receiver, sender) = client.split()?;
-    let sender = Arc::new(Mutex::new(sender));
-
-    sender_map.lock_arc().insert(peer, sender.clone());
-    queue
-        .lock_arc()
-        .push_back(EventKind::Open(WebSocketOpen { peer }));
-
-    for msg in receiver.incoming_messages() {
-        let msg = msg?;
-
-        match msg {
-            OwnedMessage::Text(data) => queue
-                .lock_arc()
-                .push_back(EventKind::Message(WebSocketMessage { data, peer })),
-            OwnedMessage::Binary(data) => queue
-                .lock_arc()
-                .push_back(EventKind::Binary(WebSocketBinary { data, peer })),
-            OwnedMessage::Close(data) => {
-                queue
-                    .lock_arc()
-                    .push_back(EventKind::Close(WebSocketClose { data, peer }));
-                sender_map.lock_arc().remove(&peer);
+fn handle_request_inner(
+    request_queue: Res<RequestQueue>,
+    mut requests: ResMut<Clients>,
+    config: Res<WebSocketServerConfig>,
+    mut open_w: EventWriter<WebSocketOpen>,
+) -> Result<(), io::Error> {
+    if !request_queue.0.is_locked() {
+        let mut queue = request_queue.clone().lock_arc();
+        if let Some(request) = queue.pop_front() {
+            if !request.protocols().contains(&config.protocol) {
+                request.reject().map_err(|(_, e)| e)?;
                 return Ok(());
             }
-            OwnedMessage::Ping(ping) => sender.lock().send_message(&OwnedMessage::Pong(ping))?,
-            _ => (),
-        };
+
+            let client = request
+                .use_protocol(&config.protocol)
+                .accept()
+                .map_err(|(_, e)| e)?;
+
+            let peer = client.peer_addr()?;
+            info!("New connection from: {}", peer);
+            let (receiver, sender) = client.split()?;
+
+            open_w.send(WebSocketOpen { peer });
+
+            requests.inner.insert(peer, Client { sender, receiver });
+        }
     }
 
     Ok(())
+}
+
+fn handle_request(
+    request_queue: Res<RequestQueue>,
+    requests: ResMut<Clients>,
+    config: Res<WebSocketServerConfig>,
+    open_w: EventWriter<WebSocketOpen>,
+) {
+    if let Err(error) = handle_request_inner(request_queue, requests, config, open_w) {
+        error!("Failed to get request. - {error}");
+    }
+}
+
+fn handle_client(
+    mut requests: ResMut<Clients>,
+    mut message_w: EventWriter<WebSocketMessage>,
+    mut binary_w: EventWriter<WebSocketBinary>,
+    mut close_w: EventWriter<WebSocketClose>,
+) {
+    if let Some((peer, request)) = requests.next() {
+        if let Ok(msg) = request.receiver.recv_message() {
+            let peer = *peer;
+
+            match msg {
+                OwnedMessage::Text(data) => {
+                    message_w.send(WebSocketMessage { data, peer });
+                }
+                OwnedMessage::Binary(data) => {
+                    binary_w.send(WebSocketBinary { data, peer });
+                }
+                OwnedMessage::Close(data) => {
+                    close_w.send(WebSocketClose { data, peer });
+
+                    requests.inner.swap_remove(&peer);
+                }
+                OwnedMessage::Ping(ping) => {
+                    if request
+                        .sender
+                        .send_message(&OwnedMessage::Pong(ping))
+                        .is_err()
+                    {
+                        error!("Failed to reply to ping.");
+                    }
+                }
+                _ => (),
+            };
+        }
+    }
 }

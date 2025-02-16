@@ -35,15 +35,19 @@ struct Client {
 fn on_connect(
     mut commands: Commands,
     mut event: EventReader<WebSocketOpen>,
-    mut writer: ResMut<WebSocketWriter>,
+    mut requests: ResMut<Clients>,
 ) {
     for open in event.read() {
         commands.spawn(Client { peer: open.peer });
 
         // This "handshake" is required since the other systems
         // require Client to exist.
-        if writer.send_message("$$hello$$", &open.peer).is_err() {
-            println!("Failed to deliver hello to {}", open.peer);
+        if let Some(mut writer) = requests.write(&open.peer) {
+            if writer.send_message("$$hello$$").is_err() {
+                println!("Failed to deliver hello to {}", open.peer);
+            }
+        } else {
+            println!("{} has closed already.", open.peer);
         }
 
         println!("New connection from: {}", open.peer);
@@ -73,17 +77,21 @@ fn on_auth(
 fn on_message(
     mut event: EventReader<WebSocketMessage>,
     query: Query<(&ClientName, &Client)>,
-    mut writer: ResMut<WebSocketWriter>,
+    mut requests: ResMut<Clients>,
 ) {
     for message in event.read() {
         for (name, client) in query.iter() {
             if client.peer == message.peer {
                 for (_, client) in query.iter() {
-                    if writer
-                        .send_message(format!("{}: {}", name.name, message.data), &client.peer)
-                        .is_err()
-                    {
-                        println!("Failed to deliver message to {}", client.peer);
+                    if let Some(mut writer) = requests.write(&client.peer) {
+                        if writer
+                            .send_message(format!("{}: {}", name.name, message.data))
+                            .is_err()
+                        {
+                            println!("Failed to deliver message to {}", client.peer);
+                        }
+                    } else {
+                        println!("{} has closed already.", client.peer);
                     }
                 }
                 println!("{}: {}", name.name, message.data);

@@ -3,14 +3,6 @@ use std::net::SocketAddr;
 use bevy::prelude::*;
 pub use websocket::CloseData;
 
-#[derive(Debug)]
-pub(crate) enum EventKind {
-    Message(WebSocketMessage),
-    Binary(WebSocketBinary),
-    Open(WebSocketOpen),
-    Close(WebSocketClose),
-}
-
 #[derive(Event, Debug)]
 pub struct WebSocketMessage {
     pub data: String,

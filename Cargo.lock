@@ -1215,6 +1215,7 @@ name = "bevy_websocket"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "indexmap",
  "parking_lot 0.12.3",
  "websocket",
 ]
