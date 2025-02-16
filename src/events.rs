@@ -4,24 +4,24 @@ use bevy::prelude::*;
 pub use websocket::CloseData;
 
 #[derive(Event, Debug)]
-pub struct WebSocketMessage {
+pub struct WebSocketMessageEvent {
     pub data: String,
     pub peer: SocketAddr,
 }
 
 #[derive(Event, Debug)]
-pub struct WebSocketBinary {
+pub struct WebSocketBinaryEvent {
     pub data: Vec<u8>,
     pub peer: SocketAddr,
 }
 
 #[derive(Event, Debug)]
-pub struct WebSocketOpen {
+pub struct WebSocketOpenEvent {
     pub peer: SocketAddr,
 }
 
 #[derive(Event, Debug)]
-pub struct WebSocketClose {
+pub struct WebSocketCloseEvent {
     pub data: Option<CloseData>,
     pub peer: SocketAddr,
 }

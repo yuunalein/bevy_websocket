@@ -43,8 +43,8 @@ struct Client {
 
 fn on_connect(
     mut commands: Commands,
-    mut event: EventReader<WebSocketOpen>,
-    mut requests: ResMut<Clients>,
+    mut event: EventReader<WebSocketOpenEvent>,
+    mut requests: ResMut<WebSocketClients>,
 ) {
     for open in event.read() {
         commands.spawn(Client { peer: open.peer });
@@ -65,7 +65,7 @@ fn on_connect(
 
 fn on_auth(
     mut commands: Commands,
-    mut event: EventReader<WebSocketMessage>,
+    mut event: EventReader<WebSocketMessageEvent>,
     query: Query<(Entity, &Client)>,
 ) {
     for message in event.read() {
@@ -84,9 +84,9 @@ fn on_auth(
 }
 
 fn on_message(
-    mut event: EventReader<WebSocketMessage>,
+    mut event: EventReader<WebSocketMessageEvent>,
     query: Query<(&ClientName, &Client)>,
-    mut requests: ResMut<Clients>,
+    mut requests: ResMut<WebSocketClients>,
 ) {
     for message in event.read() {
         for (name, client) in query.iter() {
@@ -112,7 +112,7 @@ fn on_message(
 
 fn on_disconnect(
     mut commands: Commands,
-    mut event: EventReader<WebSocketClose>,
+    mut event: EventReader<WebSocketCloseEvent>,
     query: Query<(Entity, &Client, &ClientName)>,
 ) {
     for close in event.read() {

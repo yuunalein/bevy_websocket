@@ -57,18 +57,18 @@ struct Client {
 }
 
 #[derive(Resource, Default)]
-pub struct Clients {
+pub struct WebSocketClients {
     iter_index: usize,
     inner: IndexMap<SocketAddr, Client>,
 }
-impl Clients {
+impl WebSocketClients {
     pub fn write(&mut self, target: &SocketAddr) -> Option<WebSocketWriter> {
         self.inner.get_mut(target).map(|req| WebSocketWriter {
             sender: &mut req.sender,
         })
     }
 }
-impl Clients {
+impl WebSocketClients {
     fn next(&mut self) -> Option<(&SocketAddr, &mut Client)> {
         if self.inner.is_empty() {
             return None;
@@ -91,11 +91,11 @@ pub(crate) fn install_websocket_server(app: &mut App, config: WebSocketServerCon
 
     app.insert_resource(config)
         .insert_resource(queue)
-        .init_resource::<Clients>()
-        .add_event::<WebSocketMessage>()
-        .add_event::<WebSocketBinary>()
-        .add_event::<WebSocketOpen>()
-        .add_event::<WebSocketClose>()
+        .init_resource::<WebSocketClients>()
+        .add_event::<WebSocketMessageEvent>()
+        .add_event::<WebSocketBinaryEvent>()
+        .add_event::<WebSocketOpenEvent>()
+        .add_event::<WebSocketCloseEvent>()
         .add_systems(Update, (handle_request, handle_client))
 }
 
@@ -134,9 +134,9 @@ fn listen(config: WebSocketServerConfig, queue: RequestQueueInner) {
 
 fn handle_request_inner(
     request_queue: Res<RequestQueue>,
-    mut requests: ResMut<Clients>,
+    mut requests: ResMut<WebSocketClients>,
     config: Res<WebSocketServerConfig>,
-    mut open_w: EventWriter<WebSocketOpen>,
+    mut open_w: EventWriter<WebSocketOpenEvent>,
 ) -> Result<(), io::Error> {
     if !request_queue.0.is_locked() {
         let mut queue = request_queue.clone().lock_arc();
@@ -155,7 +155,7 @@ fn handle_request_inner(
             info!("New connection from: {}", peer);
             let (receiver, sender) = client.split()?;
 
-            open_w.send(WebSocketOpen { peer });
+            open_w.send(WebSocketOpenEvent { peer });
 
             requests.inner.insert(peer, Client { sender, receiver });
         }
@@ -166,9 +166,9 @@ fn handle_request_inner(
 
 fn handle_request(
     request_queue: Res<RequestQueue>,
-    requests: ResMut<Clients>,
+    requests: ResMut<WebSocketClients>,
     config: Res<WebSocketServerConfig>,
-    open_w: EventWriter<WebSocketOpen>,
+    open_w: EventWriter<WebSocketOpenEvent>,
 ) {
     if let Err(error) = handle_request_inner(request_queue, requests, config, open_w) {
         error!("Failed to get request. - {error}");
@@ -176,10 +176,10 @@ fn handle_request(
 }
 
 fn handle_client(
-    mut requests: ResMut<Clients>,
-    mut message_w: EventWriter<WebSocketMessage>,
-    mut binary_w: EventWriter<WebSocketBinary>,
-    mut close_w: EventWriter<WebSocketClose>,
+    mut requests: ResMut<WebSocketClients>,
+    mut message_w: EventWriter<WebSocketMessageEvent>,
+    mut binary_w: EventWriter<WebSocketBinaryEvent>,
+    mut close_w: EventWriter<WebSocketCloseEvent>,
 ) {
     if let Some((peer, request)) = requests.next() {
         if let Ok(msg) = request.receiver.recv_message() {
@@ -187,13 +187,13 @@ fn handle_client(
 
             match msg {
                 OwnedMessage::Text(data) => {
-                    message_w.send(WebSocketMessage { data, peer });
+                    message_w.send(WebSocketMessageEvent { data, peer });
                 }
                 OwnedMessage::Binary(data) => {
-                    binary_w.send(WebSocketBinary { data, peer });
+                    binary_w.send(WebSocketBinaryEvent { data, peer });
                 }
                 OwnedMessage::Close(data) => {
-                    close_w.send(WebSocketClose { data, peer });
+                    close_w.send(WebSocketCloseEvent { data, peer });
 
                     requests.inner.swap_remove(&peer);
                 }
