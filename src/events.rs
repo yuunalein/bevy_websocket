@@ -44,36 +44,42 @@ impl_reply!(
     WebSocketRawEvent
 );
 
+/// This event represents text messages.
 #[derive(Event, Debug)]
 pub struct WebSocketMessageEvent {
     pub data: String,
     pub peer: WebSocketPeer,
 }
 
+/// This event represents binary data.
 #[derive(Event, Debug)]
 pub struct WebSocketBinaryEvent {
     pub data: Vec<u8>,
     pub peer: WebSocketPeer,
 }
 
+/// This event represents ping replies (pong).
 #[derive(Event, Debug)]
 pub struct WebSocketPongEvent {
     pub data: Vec<u8>,
     pub peer: WebSocketPeer,
 }
 
+/// This event represents raw frames.
 #[derive(Event, Debug)]
 pub struct WebSocketRawEvent {
     pub data: DataFrame,
     pub peer: WebSocketPeer,
 }
 
+/// This event represents that a new conversation has been established.
 #[derive(Event, Debug)]
 pub struct WebSocketOpenEvent {
     pub peer: WebSocketPeer,
     pub mode: WebSocketClientMode,
 }
 
+/// This event represents that a conversation has been closed.
 #[derive(Event, Debug)]
 pub struct WebSocketCloseEvent {
     pub data: Option<CloseData>,

@@ -27,8 +27,14 @@ use crate::writer::WebSocketWriter;
 
 #[derive(Resource, Clone)]
 pub struct WebSocketServerConfig {
+    /// Address which the server will listen on.
     pub addr: SocketAddr,
+
+    /// Protocol used for conversations that will be parsed inside this crate.
+    /// (Message, Binary, Ping, Pong, Close)
     pub parsed_protocol: String,
+
+    /// Protocol used for raw conversations.
     pub raw_protocol: String,
 }
 impl Default for WebSocketServerConfig {
@@ -52,24 +58,32 @@ struct Client {
     mode: WebSocketClientMode,
 }
 
+/// A client can operate in either Parsed or Raw mode.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum WebSocketClientMode {
     Parsed,
     Raw,
 }
 
+/// A map of active web-socket clients.
 #[derive(Resource, Default)]
 pub struct WebSocketClients {
     iter_index: usize,
     inner: IndexMap<WebSocketPeer, Client>,
 }
 impl WebSocketClients {
+    /// Create a [`WebSocketWriter`] for a client.
+    ///
+    /// Returns [None] if a client with the specified [`WebSocketPeer`] does not exist.
     pub fn write(&mut self, target: &WebSocketPeer) -> Option<WebSocketWriter> {
         self.inner.get_mut(target).map(|client| WebSocketWriter {
             sender: &mut client.sender,
         })
     }
 
+    /// Set the operation mode for a client.
+    ///
+    /// Returns [None] if a client with the specified [`WebSocketPeer`] does not exist.
     pub fn set_mode(&mut self, target: &WebSocketPeer, mode: WebSocketClientMode) -> Option<()> {
         self.inner.get_mut(target).map(|client| {
             client.mode = mode;
@@ -86,13 +100,22 @@ impl WebSocketClients {
     }
 }
 
+/// Used to identify clients in [`WebSocketClients`].
+///
+/// Wraps a [SocketAddr].
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Deref, DerefMut)]
 pub struct WebSocketPeer(SocketAddr);
 impl WebSocketPeer {
+    /// Create a [`WebSocketWriter`] for the client corresponding to this [`WebSocketPeer`].
+    ///
+    /// Returns [None] if a client with this [`WebSocketPeer`] does not exist.
     pub fn write<'c>(&self, clients: &'c mut WebSocketClients) -> Option<WebSocketWriter<'c>> {
         clients.write(self)
     }
 
+    /// Set the operation mode for the client corresponding to this [`WebSocketPeer`].
+    ///
+    /// Returns [None] if a client with this [`WebSocketPeer`] does not exist.
     pub fn set_mode(
         &self,
         clients: &mut WebSocketClients,

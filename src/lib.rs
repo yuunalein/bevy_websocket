@@ -16,6 +16,7 @@ use server::*;
 
 pub use server::*;
 
+/// This plugin will add support for web-socket communication to a Bevy Application.
 pub struct WebSocketPlugin;
 impl Plugin for WebSocketPlugin {
     fn build(&self, app: &mut App) {
@@ -23,6 +24,7 @@ impl Plugin for WebSocketPlugin {
     }
 }
 impl WebSocketPlugin {
+    /// Customize the plugin with a [`WebSocketServerConfig`]
     pub fn custom(config: WebSocketServerConfig) -> CustomWebSocketPlugin {
         CustomWebSocketPlugin(config)
     }
