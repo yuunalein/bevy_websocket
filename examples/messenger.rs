@@ -38,20 +38,20 @@ struct ClientName {
 
 #[derive(Debug, Component)]
 struct Client {
-    peer: SocketAddr,
+    peer: WebSocketPeer,
 }
 
 fn on_connect(
     mut commands: Commands,
     mut event: EventReader<WebSocketOpenEvent>,
-    mut requests: ResMut<WebSocketClients>,
+    mut clients: ResMut<WebSocketClients>,
 ) {
     for open in event.read() {
         commands.spawn(Client { peer: open.peer });
 
         // This "handshake" is required since the other systems
         // require Client to exist.
-        if let Some(mut writer) = requests.write(&open.peer) {
+        if let Some(mut writer) = open.reply(&mut clients) {
             if writer.send_message("$$hello$$").is_err() {
                 println!("Failed to deliver hello to {}", open.peer);
             }
@@ -86,13 +86,13 @@ fn on_auth(
 fn on_message(
     mut event: EventReader<WebSocketMessageEvent>,
     query: Query<(&ClientName, &Client)>,
-    mut requests: ResMut<WebSocketClients>,
+    mut clients: ResMut<WebSocketClients>,
 ) {
     for message in event.read() {
         for (name, client) in query.iter() {
             if client.peer == message.peer {
                 for (_, client) in query.iter() {
-                    if let Some(mut writer) = requests.write(&client.peer) {
+                    if let Some(mut writer) = client.peer.write(&mut clients) {
                         if writer
                             .send_message(format!("{}: {}", name.name, message.data))
                             .is_err()

@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::ops::Deref;
+use std::fmt::Display;
 
 use std::sync::Arc;
 use std::thread;
@@ -41,15 +41,8 @@ impl Default for WebSocketServerConfig {
 
 type RequestQueueInner = Arc<Mutex<VecDeque<WsUpgrade<TcpStream, Option<Buffer>>>>>;
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Deref)]
 struct RequestQueue(RequestQueueInner);
-impl Deref for RequestQueue {
-    type Target = RequestQueueInner;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 struct Client {
     sender: Writer<TcpStream>,
@@ -59,23 +52,35 @@ struct Client {
 #[derive(Resource, Default)]
 pub struct WebSocketClients {
     iter_index: usize,
-    inner: IndexMap<SocketAddr, Client>,
+    inner: IndexMap<WebSocketPeer, Client>,
 }
 impl WebSocketClients {
-    pub fn write(&mut self, target: &SocketAddr) -> Option<WebSocketWriter> {
+    pub fn write(&mut self, target: &WebSocketPeer) -> Option<WebSocketWriter> {
         self.inner.get_mut(target).map(|req| WebSocketWriter {
             sender: &mut req.sender,
         })
     }
-}
-impl WebSocketClients {
-    fn next(&mut self) -> Option<(&SocketAddr, &mut Client)> {
+
+    fn next(&mut self) -> Option<(&WebSocketPeer, &mut Client)> {
         if self.inner.is_empty() {
             return None;
         }
 
         self.iter_index = (self.iter_index + 1) % self.inner.len();
         self.inner.get_index_mut(self.iter_index)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Deref, DerefMut)]
+pub struct WebSocketPeer(SocketAddr);
+impl WebSocketPeer {
+    pub fn write<'c>(&self, clients: &'c mut WebSocketClients) -> Option<WebSocketWriter<'c>> {
+        clients.write(self)
+    }
+}
+impl Display for WebSocketPeer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -152,7 +157,7 @@ fn handle_request_inner(
                 .accept()
                 .map_err(|(_, e)| e)?;
 
-            let peer = client.peer_addr()?;
+            let peer = WebSocketPeer(client.peer_addr()?);
             info!("New connection from: {}", peer);
             let (receiver, sender) = client.split()?;
 
@@ -207,9 +212,9 @@ fn handle_client(
                     pong_w.send(WebSocketPongEvent { data, peer });
                 }
                 OwnedMessage::Close(data) => {
-                    close_w.send(WebSocketCloseEvent { data, peer });
-
                     requests.inner.swap_remove(&peer);
+
+                    close_w.send(WebSocketCloseEvent { data, peer });
                 }
             };
         }
