@@ -68,6 +68,16 @@ pub enum WebSocketClientMode {
 }
 
 /// A map of active web-socket clients.
+///
+/// ```
+/// fn send(mut clients: ResMut<WebSocketClients>) {
+///     clients
+///         .write(&"127.0.0.1:42069".parse().unwrap())
+///         .unwrap()
+///         .send_message("Hello World")
+///         .unwrap();
+/// }
+/// ```
 #[derive(Resource, Default)]
 pub struct WebSocketClients {
     iter_index: usize,

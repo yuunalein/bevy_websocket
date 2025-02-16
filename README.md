@@ -32,14 +32,18 @@ fn main() {
 }
 
 fn on_message(
-    mut event: EventReader<WebSocketMessage>,
-    mut writer: ResMut<WebSocketWriter>,
+    mut event: EventReader<WebSocketMessageEvent>,
+    mut clients: ResMut<WebSocketClients>,
 ) {
     for message in event.read() {
         println!("Received {}", message.data);
 
         if message.data == "ping" {
-            writer.send_message("Pong!", &message.peer).unwrap();
+            message
+                .reply(&mut clients)
+                .unwrap()
+                .send_message("Pong!")
+                .unwrap();
         }
     }
 }
