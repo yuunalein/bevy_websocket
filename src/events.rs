@@ -25,7 +25,7 @@ macro_rules! impl_reply {
                 clients: &mut WebSocketClients,
                 mode: WebSocketClientMode,
             ) -> Option<()> {
-                clients.set_mode(&self.peer, mode)
+                self.peer.set_mode(clients, mode)
             }
         }
     };

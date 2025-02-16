@@ -92,6 +92,14 @@ impl WebSocketPeer {
     pub fn write<'c>(&self, clients: &'c mut WebSocketClients) -> Option<WebSocketWriter<'c>> {
         clients.write(self)
     }
+
+    pub fn set_mode(
+        &self,
+        clients: &mut WebSocketClients,
+        mode: WebSocketClientMode,
+    ) -> Option<()> {
+        clients.set_mode(self, mode)
+    }
 }
 impl Display for WebSocketPeer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
