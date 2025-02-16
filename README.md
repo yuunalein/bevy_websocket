@@ -8,7 +8,19 @@ A WebSocket server that runs in bevy.
 
 1. Add `bevy_websocket` to your `Cargo.toml`
 2. Add `bevy_websocket::WebSocketPlugin` to your bevy `App`
-3. Receive messages with `EventReader<WebSocketMessage>` or send any with `ResMut<WebSocketWriter>`
+3. Receive messages with `EventReader<WebSocketMessageEvent>` or send any with `ResMut<WebSocketClients>`
+
+---
+
+bevy_websocket is currently not available on crates.io. [see why.](https://github.com/yuunalein/bevy_websocket/issues/1)
+
+Add bevy_websocket with following line to your Cargo dependencies.
+
+```toml
+bevy_websocket = { git = "https://github.com/yuunalein/bevy_websocket.git", tag = "v0.2.0" }
+```
+
+---
 
 ### Examples
 
@@ -48,6 +60,12 @@ fn on_message(
     }
 }
 ```
+
+## Bevy Version Support
+
+| bevy | bevy_websocket |
+| ---- | -------------- |
+| 0.15 | 0.1, 0.2       |
 
 ---
 
