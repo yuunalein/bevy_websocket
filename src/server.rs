@@ -33,7 +33,7 @@ pub struct WebSocketServerConfig {
 impl Default for WebSocketServerConfig {
     fn default() -> Self {
         Self {
-            addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 2794)),
+            addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0)),
             protocol: "bevy_websocket".to_string(),
         }
     }

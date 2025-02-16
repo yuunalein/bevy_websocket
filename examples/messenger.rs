@@ -1,11 +1,20 @@
-use std::{env::current_dir, net::SocketAddr};
+use std::{
+    env::current_dir,
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+};
 
 use bevy::prelude::*;
 use bevy_websocket::prelude::*;
 
 fn main() {
     App::new()
-        .add_plugins((MinimalPlugins, WebSocketPlugin))
+        .add_plugins((
+            MinimalPlugins,
+            WebSocketPlugin::custom(WebSocketServerConfig {
+                addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 42069)),
+                ..default()
+            }),
+        ))
         .add_systems(Startup, setup)
         .add_systems(Update, (on_connect, on_auth, on_message, on_disconnect))
         .run();
