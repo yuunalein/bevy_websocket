@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt::Display;
+use std::mem::MaybeUninit;
 use std::net::AddrParseError;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use bevy::prelude::*;
 use indexmap::IndexMap;
 use parking_lot::Mutex;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
-use tungstenite::http::StatusCode;
+use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use tungstenite::protocol::frame::FrameSocket;
 use tungstenite::{accept_hdr, Message, WebSocket};
 
@@ -204,21 +205,24 @@ fn handle_request_inner(
         let mut queue = request_queue.clone().lock_arc();
         if let Some(request) = queue.pop_front() {
             let peer = request.peer_addr()?;
-            let mut mode = WebSocketClientMode::Parsed;
+            let mut mode: MaybeUninit<WebSocketClientMode> = MaybeUninit::uninit();
+            let mut headers: MaybeUninit<HeaderMap<HeaderValue>> = MaybeUninit::uninit();
 
             if let Ok(stream) = accept_hdr(request, |request: &Request, response: Response| {
-                handle_accept(request, response, &config).map(|(res, new_mode)| {
-                    mode = new_mode;
-
-                    res
-                })
+                handle_accept(request, response, &config, &mut mode, &mut headers)
             }) {
                 let peer = WebSocketPeer(peer);
                 info!("New connection from: {}", peer);
 
+                let (mode, headers) = unsafe { (mode.assume_init(), headers.assume_init()) };
+
                 clients.inner.insert(peer, Client { stream, mode });
 
-                open_w.send(WebSocketOpenEvent { peer, mode });
+                open_w.send(WebSocketOpenEvent {
+                    peer,
+                    mode,
+                    headers,
+                });
             }
         }
     }
@@ -231,7 +235,11 @@ fn handle_accept(
     request: &Request,
     mut response: Response,
     config: &WebSocketServerConfig,
-) -> Result<(Response, WebSocketClientMode), ErrorResponse> {
+    mode: &mut MaybeUninit<WebSocketClientMode>,
+    headers: &mut MaybeUninit<HeaderMap<HeaderValue>>,
+) -> Result<Response, ErrorResponse> {
+    headers.write(request.headers().clone());
+
     if let Some(protocols) = request.headers().get("Sec-WebSocket-Protocol") {
         let protocols: Vec<&str> = protocols
             .to_str()
@@ -241,6 +249,8 @@ fn handle_accept(
             .collect();
 
         if protocols.contains(&config.parsed_protocol.as_str()) {
+            mode.write(WebSocketClientMode::Parsed);
+
             response.headers_mut().append(
                 "Sec-WebSocket-Protocol",
                 config
@@ -248,8 +258,10 @@ fn handle_accept(
                     .parse()
                     .expect("Failed to parse protocol"),
             );
-            Ok((response, WebSocketClientMode::Parsed))
+            Ok(response)
         } else if protocols.contains(&config.raw_protocol.as_str()) {
+            mode.write(WebSocketClientMode::Raw);
+
             response.headers_mut().append(
                 "Sec-WebSocket-Protocol",
                 config
@@ -258,7 +270,7 @@ fn handle_accept(
                     .expect("Failed to parse protocol"),
             );
 
-            Ok((response, WebSocketClientMode::Raw))
+            Ok(response)
         } else {
             Err(Response::builder()
                 .status(StatusCode::BAD_REQUEST)

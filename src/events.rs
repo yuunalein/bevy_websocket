@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use tungstenite::{
+    http::{HeaderMap, HeaderValue},
     protocol::{frame::Frame, CloseFrame},
     Bytes,
 };
@@ -77,6 +78,7 @@ pub struct WebSocketRawEvent {
 pub struct WebSocketOpenEvent {
     pub peer: WebSocketPeer,
     pub mode: WebSocketClientMode,
+    pub headers: HeaderMap<HeaderValue>,
 }
 
 /// This event represents that a conversation has been closed.
