@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 use std::fmt::Display;
-
 use std::net::AddrParseError;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -14,15 +13,10 @@ use std::{
 use bevy::prelude::*;
 use indexmap::IndexMap;
 use parking_lot::Mutex;
-use websocket::server::upgrade::WsUpgrade;
-use websocket::sync::server::upgrade::Buffer;
-use websocket::sync::server::HyperIntoWsError;
-use websocket::sync::{Reader, Writer};
-use websocket::{
-    server::{NoTlsAcceptor, WsServer},
-    sync::Server,
-    OwnedMessage,
-};
+use tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tungstenite::http::StatusCode;
+use tungstenite::protocol::frame::FrameSocket;
+use tungstenite::{accept_hdr, Message, WebSocket};
 
 use crate::events::*;
 use crate::writer::WebSocketWriter;
@@ -49,14 +43,14 @@ impl Default for WebSocketServerConfig {
     }
 }
 
-type RequestQueueInner = Arc<Mutex<VecDeque<WsUpgrade<TcpStream, Option<Buffer>>>>>;
+type RequestQueueInner = Arc<Mutex<VecDeque<TcpStream>>>;
 
 #[derive(Resource, Default, Deref)]
 struct RequestQueue(RequestQueueInner);
 
-struct Client {
-    sender: Writer<TcpStream>,
-    receiver: Reader<TcpStream>,
+#[derive(Debug)]
+pub struct Client {
+    stream: WebSocket<TcpStream>,
     mode: WebSocketClientMode,
 }
 
@@ -89,7 +83,7 @@ impl WebSocketClients {
     /// Returns [None] if a client with the specified [`WebSocketPeer`] does not exist.
     pub fn write(&mut self, target: &WebSocketPeer) -> Option<WebSocketWriter> {
         self.inner.get_mut(target).map(|client| WebSocketWriter {
-            sender: &mut client.sender,
+            stream: &mut client.stream,
         })
     }
 
@@ -171,10 +165,8 @@ pub(crate) fn install_websocket_server(app: &mut App, config: WebSocketServerCon
         .add_systems(Update, (handle_request, handle_client))
 }
 
-fn start_server(
-    config: WebSocketServerConfig,
-) -> Result<WsServer<NoTlsAcceptor, TcpListener>, io::Error> {
-    let server = Server::bind(config.addr)?;
+fn start_server(config: WebSocketServerConfig) -> Result<TcpListener, io::Error> {
+    let server = TcpListener::bind(config.addr)?;
     info!("Server running at ws://{}", server.local_addr()?);
     server.set_nonblocking(true)?;
 
@@ -190,14 +182,12 @@ fn listen(config: WebSocketServerConfig, queue: RequestQueueInner) {
         }
     };
 
-    for request in server.into_iter() {
+    for request in server.incoming() {
         match request {
             Ok(req) => queue.lock_arc().push_back(req),
             Err(e) => {
-                if let HyperIntoWsError::Io(ref e) = e.error {
-                    if e.kind() == io::ErrorKind::WouldBlock {
-                        thread::sleep(Duration::from_millis(50));
-                    }
+                if e.kind() == io::ErrorKind::WouldBlock {
+                    thread::sleep(Duration::from_millis(50));
                 }
             }
         };
@@ -213,39 +203,74 @@ fn handle_request_inner(
     if !request_queue.0.is_locked() {
         let mut queue = request_queue.clone().lock_arc();
         if let Some(request) = queue.pop_front() {
-            let protocols = request.protocols();
-            let (mode, protocol) = if protocols.contains(&config.parsed_protocol) {
-                (WebSocketClientMode::Parsed, &config.parsed_protocol)
-            } else if protocols.contains(&config.raw_protocol) {
-                (WebSocketClientMode::Raw, &config.raw_protocol)
-            } else {
-                request.reject().map_err(|(_, e)| e)?;
-                return Ok(());
-            };
+            let peer = request.peer_addr()?;
+            let mut mode = WebSocketClientMode::Parsed;
 
-            let client = request
-                .use_protocol(protocol)
-                .accept()
-                .map_err(|(_, e)| e)?;
+            if let Ok(stream) = accept_hdr(request, |request: &Request, response: Response| {
+                handle_accept(request, response, &config).map(|(res, new_mode)| {
+                    mode = new_mode;
 
-            let peer = WebSocketPeer(client.peer_addr()?);
-            info!("New connection from: {}", peer);
-            let (receiver, sender) = client.split()?;
+                    res
+                })
+            }) {
+                let peer = WebSocketPeer(peer);
+                info!("New connection from: {}", peer);
 
-            open_w.send(WebSocketOpenEvent { peer, mode });
+                clients.inner.insert(peer, Client { stream, mode });
 
-            clients.inner.insert(
-                peer,
-                Client {
-                    sender,
-                    receiver,
-                    mode,
-                },
-            );
+                open_w.send(WebSocketOpenEvent { peer, mode });
+            }
         }
     }
 
     Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+fn handle_accept(
+    request: &Request,
+    mut response: Response,
+    config: &WebSocketServerConfig,
+) -> Result<(Response, WebSocketClientMode), ErrorResponse> {
+    if let Some(protocols) = request.headers().get("Sec-WebSocket-Protocol") {
+        let protocols: Vec<&str> = protocols
+            .to_str()
+            .unwrap_or("")
+            .split(',')
+            .map(|item| item.trim())
+            .collect();
+
+        if protocols.contains(&config.parsed_protocol.as_str()) {
+            response.headers_mut().append(
+                "Sec-WebSocket-Protocol",
+                config
+                    .parsed_protocol
+                    .parse()
+                    .expect("Failed to parse protocol"),
+            );
+            Ok((response, WebSocketClientMode::Parsed))
+        } else if protocols.contains(&config.raw_protocol.as_str()) {
+            response.headers_mut().append(
+                "Sec-WebSocket-Protocol",
+                config
+                    .raw_protocol
+                    .parse()
+                    .expect("Failed to parse protocol"),
+            );
+
+            Ok((response, WebSocketClientMode::Raw))
+        } else {
+            Err(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(None)
+                .expect("Failed to build error response."))
+        }
+    } else {
+        Err(Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(None)
+            .expect("Failed to build error response."))
+    }
 }
 
 fn handle_request(
@@ -264,7 +289,7 @@ fn handle_client(
     mut message_w: EventWriter<WebSocketMessageEvent>,
     mut binary_w: EventWriter<WebSocketBinaryEvent>,
     mut pong_w: EventWriter<WebSocketPongEvent>,
-    mut data_w: EventWriter<WebSocketRawEvent>,
+    mut raw_w: EventWriter<WebSocketRawEvent>,
     mut close_w: EventWriter<WebSocketCloseEvent>,
 ) {
     if let Some((peer, client)) = clients.next() {
@@ -272,37 +297,40 @@ fn handle_client(
 
         match client.mode {
             WebSocketClientMode::Parsed => {
-                if let Ok(msg) = client.receiver.recv_message() {
+                if let Ok(msg) = client.stream.read() {
                     match msg {
-                        OwnedMessage::Text(data) => {
-                            message_w.send(WebSocketMessageEvent { data, peer });
+                        Message::Text(data) => {
+                            message_w.send(WebSocketMessageEvent {
+                                data: data.to_string(),
+                                peer,
+                            });
                         }
-                        OwnedMessage::Binary(data) => {
+                        Message::Binary(data) => {
                             binary_w.send(WebSocketBinaryEvent { data, peer });
                         }
-                        OwnedMessage::Ping(data) => {
-                            if client
-                                .sender
-                                .send_message(&OwnedMessage::Pong(data))
-                                .is_err()
-                            {
+                        Message::Ping(data) => {
+                            if client.stream.send(Message::Pong(data)).is_err() {
                                 error!("Failed to reply to ping.");
                             }
                         }
-                        OwnedMessage::Pong(data) => {
+                        Message::Pong(data) => {
                             pong_w.send(WebSocketPongEvent { data, peer });
                         }
-                        OwnedMessage::Close(data) => {
+                        Message::Close(data) => {
                             clients.inner.swap_remove(&peer);
 
                             close_w.send(WebSocketCloseEvent { data, peer });
                         }
+                        _ => (),
                     };
                 }
             }
             WebSocketClientMode::Raw => {
-                if let Ok(data) = client.receiver.recv_dataframe() {
-                    data_w.send(WebSocketRawEvent { data, peer });
+                let max_size = client.stream.get_config().max_frame_size;
+                let mut reader = FrameSocket::new(client.stream.get_mut());
+
+                if let Ok(Some(data)) = reader.read(max_size) {
+                    raw_w.send(WebSocketRawEvent { data, peer });
                 }
             }
         }

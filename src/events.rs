@@ -1,7 +1,7 @@
 use bevy::prelude::*;
-pub use websocket::{
-    dataframe::{DataFrame, Opcode},
-    CloseData,
+use tungstenite::{
+    protocol::{frame::Frame, CloseFrame},
+    Bytes,
 };
 
 use crate::{
@@ -54,21 +54,21 @@ pub struct WebSocketMessageEvent {
 /// This event represents binary data.
 #[derive(Event, Debug)]
 pub struct WebSocketBinaryEvent {
-    pub data: Vec<u8>,
+    pub data: Bytes,
     pub peer: WebSocketPeer,
 }
 
 /// This event represents ping replies (pong).
 #[derive(Event, Debug)]
 pub struct WebSocketPongEvent {
-    pub data: Vec<u8>,
+    pub data: Bytes,
     pub peer: WebSocketPeer,
 }
 
 /// This event represents raw frames.
 #[derive(Event, Debug)]
 pub struct WebSocketRawEvent {
-    pub data: DataFrame,
+    pub data: Frame,
     pub peer: WebSocketPeer,
 }
 
@@ -82,6 +82,6 @@ pub struct WebSocketOpenEvent {
 /// This event represents that a conversation has been closed.
 #[derive(Event, Debug)]
 pub struct WebSocketCloseEvent {
-    pub data: Option<CloseData>,
+    pub data: Option<CloseFrame>,
     pub peer: WebSocketPeer,
 }

@@ -1,5 +1,11 @@
 use bevy::{log::LogPlugin, prelude::*};
-use bevy_websocket::prelude::*;
+use bevy_websocket::{
+    prelude::*,
+    tungstenite::protocol::frame::{
+        coding::{Data, OpCode},
+        Frame,
+    },
+};
 
 fn main() {
     App::new()
@@ -17,15 +23,11 @@ fn setup() {
 
 fn on_message(mut event: EventReader<WebSocketRawEvent>, mut clients: ResMut<WebSocketClients>) {
     for event in event.read() {
-        if event.data.opcode == Opcode::Text {
+        if event.data.header().opcode == OpCode::Data(Data::Text) {
             event
                 .reply(&mut clients)
                 .unwrap()
-                .send_raw(&DataFrame::new(
-                    true,
-                    Opcode::Text,
-                    "rawr 🐯".as_bytes().to_vec(),
-                ))
+                .send_raw(Frame::message("rawr 🐯", OpCode::Data(Data::Text), true))
                 .unwrap();
         }
     }

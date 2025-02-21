@@ -17,6 +17,8 @@ use server::*;
 
 pub use server::*;
 
+pub use tungstenite;
+
 /// This plugin will add support for web-socket communication to a Bevy Application.
 pub struct WebSocketPlugin;
 impl Plugin for WebSocketPlugin {
