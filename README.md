@@ -17,7 +17,7 @@ bevy_websocket is currently not available on crates.io. [see why.](https://githu
 Add bevy_websocket with following line to your Cargo dependencies.
 
 ```toml
-bevy_websocket = { git = "https://github.com/yuunalein/bevy_websocket.git", tag = "v0.2.0" }
+bevy_websocket = { git = "https://github.com/yuunalein/bevy_websocket.git", tag = "v0.2.1" }
 ```
 
 ---
