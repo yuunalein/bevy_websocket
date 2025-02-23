@@ -1,12 +1,16 @@
 #![warn(clippy::unwrap_used)]
 #![doc = include_str!("../README.md")]
 
+pub mod client;
 pub mod events;
-mod server;
+pub mod peer;
+pub mod server;
 pub mod writer;
 
 pub mod prelude {
+    pub use crate::client::*;
     pub use crate::events::*;
+    pub use crate::peer::*;
     pub use crate::server::*;
     pub use crate::writer::*;
     pub use crate::WebSocketPlugin;
@@ -14,8 +18,6 @@ pub mod prelude {
 
 use bevy::prelude::*;
 use server::*;
-
-pub use server::*;
 
 pub use tungstenite;
 

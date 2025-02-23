@@ -1,8 +1,5 @@
 use std::collections::VecDeque;
-use std::fmt::Display;
 use std::mem::MaybeUninit;
-use std::net::AddrParseError;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -12,15 +9,15 @@ use std::{
 };
 
 use bevy::prelude::*;
-use indexmap::IndexMap;
 use parking_lot::Mutex;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use tungstenite::protocol::frame::FrameSocket;
-use tungstenite::{accept_hdr, Message, WebSocket};
+use tungstenite::{accept_hdr, Message};
 
+use crate::client::{Client, WebSocketClientMode, WebSocketClients};
 use crate::events::*;
-use crate::writer::WebSocketWriter;
+use crate::peer::WebSocketPeer;
 
 #[derive(Resource, Clone)]
 pub struct WebSocketServerConfig {
@@ -48,101 +45,6 @@ type RequestQueueInner = Arc<Mutex<VecDeque<TcpStream>>>;
 
 #[derive(Resource, Default, Deref)]
 struct RequestQueue(RequestQueueInner);
-
-#[derive(Debug)]
-pub struct Client {
-    stream: WebSocket<TcpStream>,
-    mode: WebSocketClientMode,
-}
-
-/// A client can operate in either Parsed or Raw mode.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub enum WebSocketClientMode {
-    Parsed,
-    Raw,
-}
-
-/// A map of active web-socket clients.
-///
-/// ```
-/// fn send(mut clients: ResMut<WebSocketClients>) {
-///     clients
-///         .write(&"127.0.0.1:42069".parse().unwrap())
-///         .unwrap()
-///         .send_message("Hello World")
-///         .unwrap();
-/// }
-/// ```
-#[derive(Resource, Default)]
-pub struct WebSocketClients {
-    iter_index: usize,
-    inner: IndexMap<WebSocketPeer, Client>,
-}
-impl WebSocketClients {
-    /// Create a [`WebSocketWriter`] for a client.
-    ///
-    /// Returns [None] if a client with the specified [`WebSocketPeer`] does not exist.
-    pub fn write(&mut self, target: &WebSocketPeer) -> Option<WebSocketWriter> {
-        self.inner.get_mut(target).map(|client| WebSocketWriter {
-            stream: &mut client.stream,
-        })
-    }
-
-    /// Set the operation mode for a client.
-    ///
-    /// Returns [None] if a client with the specified [`WebSocketPeer`] does not exist.
-    pub fn set_mode(&mut self, target: &WebSocketPeer, mode: WebSocketClientMode) -> Option<()> {
-        self.inner.get_mut(target).map(|client| {
-            client.mode = mode;
-        })
-    }
-
-    fn next(&mut self) -> Option<(&WebSocketPeer, &mut Client)> {
-        if self.inner.is_empty() {
-            return None;
-        }
-
-        self.iter_index = (self.iter_index + 1) % self.inner.len();
-        self.inner.get_index_mut(self.iter_index)
-    }
-}
-
-/// Used to identify clients in [`WebSocketClients`].
-///
-/// Wraps a [SocketAddr].
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Deref, DerefMut)]
-pub struct WebSocketPeer(pub SocketAddr);
-impl WebSocketPeer {
-    /// Create a [`WebSocketWriter`] for the client corresponding to this [`WebSocketPeer`].
-    ///
-    /// Returns [None] if a client with this [`WebSocketPeer`] does not exist.
-    pub fn write<'c>(&self, clients: &'c mut WebSocketClients) -> Option<WebSocketWriter<'c>> {
-        clients.write(self)
-    }
-
-    /// Set the operation mode for the client corresponding to this [`WebSocketPeer`].
-    ///
-    /// Returns [None] if a client with this [`WebSocketPeer`] does not exist.
-    pub fn set_mode(
-        &self,
-        clients: &mut WebSocketClients,
-        mode: WebSocketClientMode,
-    ) -> Option<()> {
-        clients.set_mode(self, mode)
-    }
-}
-impl FromStr for WebSocketPeer {
-    type Err = AddrParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(SocketAddr::from_str(s)?))
-    }
-}
-impl Display for WebSocketPeer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
 
 pub(crate) fn install_websocket_server(app: &mut App, config: WebSocketServerConfig) -> &mut App {
     let queue = RequestQueue::default();

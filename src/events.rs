@@ -6,9 +6,9 @@ use tungstenite::{
 };
 
 use crate::{
-    server::{WebSocketClients, WebSocketPeer},
+    client::{WebSocketClientMode, WebSocketClients},
+    peer::WebSocketPeer,
     writer::WebSocketWriter,
-    WebSocketClientMode,
 };
 
 macro_rules! impl_reply {
