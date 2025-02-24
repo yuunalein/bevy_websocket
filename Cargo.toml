@@ -3,6 +3,10 @@ name = "bevy_websocket"
 version = "0.2.1"
 edition = "2021"
 
+[features]
+rustls = ["tungstenite/__rustls-tls"]
+native-tls = ["tungstenite/native-tls"]
+
 [dependencies]
 bevy = "0.15"
 indexmap = "2.7.1"

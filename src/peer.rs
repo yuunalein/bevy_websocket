@@ -42,7 +42,12 @@ impl WebSocketPeer {
     ) -> Result<Self, io::Error> {
         Ok(Self(match stream {
             MaybeTlsStream::Plain(stream) => stream.peer_addr()?,
-            _ => panic!("tls support is not yet implemented."),
+            #[cfg(feature = "rustls")]
+            MaybeTlsStream::Rustls(stream) => stream.sock.peer_addr()?,
+            #[cfg(feature = "native-tls")]
+            MaybeTlsStream::NativeTls(stream) => stream.get_ref().peer_addr()?,
+            // because `MaybeTlsStream` implements #[non_exhaustive] we need to implement a &_ case.
+            _ => unreachable!("This should not happen."),
         }))
     }
 }
