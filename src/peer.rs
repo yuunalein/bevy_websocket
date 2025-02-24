@@ -1,10 +1,12 @@
 use std::{
     fmt::Display,
-    net::{AddrParseError, SocketAddr},
+    io,
+    net::{AddrParseError, SocketAddr, TcpStream},
     str::FromStr,
 };
 
 use bevy::prelude::*;
+use tungstenite::stream::MaybeTlsStream;
 
 use crate::{
     client::{WebSocketClientMode, WebSocketClients},
@@ -33,6 +35,15 @@ impl WebSocketPeer {
         mode: WebSocketClientMode,
     ) -> Option<()> {
         clients.set_mode(self, mode)
+    }
+
+    pub(crate) fn from_maybe_tls_stream(
+        stream: &MaybeTlsStream<TcpStream>,
+    ) -> Result<Self, io::Error> {
+        Ok(Self(match stream {
+            MaybeTlsStream::Plain(stream) => stream.peer_addr()?,
+            _ => panic!("tls support is not yet implemented."),
+        }))
     }
 }
 impl FromStr for WebSocketPeer {

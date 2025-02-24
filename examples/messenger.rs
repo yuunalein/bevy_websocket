@@ -10,7 +10,8 @@ fn main() {
     App::new()
         .add_plugins((
             MinimalPlugins,
-            WebSocketPlugin::custom(WebSocketServerConfig {
+            WebSocketPlugin,
+            WebSocketServerPlugin::custom(WebSocketServerConfig {
                 addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 42069)),
                 ..default()
             }),

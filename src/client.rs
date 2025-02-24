@@ -2,13 +2,16 @@ use std::net::TcpStream;
 
 use bevy::prelude::*;
 use indexmap::IndexMap;
-use tungstenite::WebSocket;
+use tungstenite::{
+    client::IntoClientRequest, connect, http::Response, protocol::frame::FrameSocket,
+    stream::MaybeTlsStream, Error, Message, WebSocket,
+};
 
-use crate::{peer::WebSocketPeer, writer::WebSocketWriter};
+use crate::{events::*, peer::WebSocketPeer, writer::WebSocketWriter};
 
 #[derive(Debug)]
 pub(crate) struct Client {
-    pub stream: WebSocket<TcpStream>,
+    pub stream: WebSocket<MaybeTlsStream<TcpStream>>,
     pub mode: WebSocketClientMode,
 }
 
@@ -36,6 +39,19 @@ pub struct WebSocketClients {
     pub(crate) inner: IndexMap<WebSocketPeer, Client>,
 }
 impl WebSocketClients {
+    #[allow(clippy::type_complexity)]
+    pub fn request<Req: IntoClientRequest>(
+        &mut self,
+        request: Req,
+        mode: WebSocketClientMode,
+    ) -> Result<(WebSocketPeer, Response<Option<Vec<u8>>>), Error> {
+        let (stream, response) = connect(request)?;
+        let peer = WebSocketPeer::from_maybe_tls_stream(stream.get_ref())?;
+
+        self.inner.insert(peer, Client { stream, mode });
+        Ok((peer, response))
+    }
+
     /// Create a [`WebSocketWriter`] for a client.
     ///
     /// Returns [None] if a client with the specified [`WebSocketPeer`] does not exist.
@@ -61,5 +77,58 @@ impl WebSocketClients {
 
         self.iter_index = (self.iter_index + 1) % self.inner.len();
         self.inner.get_index_mut(self.iter_index)
+    }
+}
+
+pub(crate) fn handle_clients(
+    mut clients: ResMut<WebSocketClients>,
+    mut message_w: EventWriter<WebSocketMessageEvent>,
+    mut binary_w: EventWriter<WebSocketBinaryEvent>,
+    mut pong_w: EventWriter<WebSocketPongEvent>,
+    mut raw_w: EventWriter<WebSocketRawEvent>,
+    mut close_w: EventWriter<WebSocketCloseEvent>,
+) {
+    if let Some((peer, client)) = clients.next() {
+        let peer = *peer;
+
+        match client.mode {
+            WebSocketClientMode::Parsed => {
+                if let Ok(msg) = client.stream.read() {
+                    match msg {
+                        Message::Text(data) => {
+                            message_w.send(WebSocketMessageEvent {
+                                data: data.to_string(),
+                                peer,
+                            });
+                        }
+                        Message::Binary(data) => {
+                            binary_w.send(WebSocketBinaryEvent { data, peer });
+                        }
+                        Message::Ping(data) => {
+                            if client.stream.send(Message::Pong(data)).is_err() {
+                                error!("Failed to reply to ping.");
+                            }
+                        }
+                        Message::Pong(data) => {
+                            pong_w.send(WebSocketPongEvent { data, peer });
+                        }
+                        Message::Close(data) => {
+                            clients.inner.swap_remove(&peer);
+
+                            close_w.send(WebSocketCloseEvent { data, peer });
+                        }
+                        _ => (),
+                    };
+                }
+            }
+            WebSocketClientMode::Raw => {
+                let max_size = client.stream.get_config().max_frame_size;
+                let mut reader = FrameSocket::new(client.stream.get_mut());
+
+                if let Ok(Some(data)) = reader.read(max_size) {
+                    raw_w.send(WebSocketRawEvent { data, peer });
+                }
+            }
+        }
     }
 }

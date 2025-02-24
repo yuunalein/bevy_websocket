@@ -9,7 +9,12 @@ use bevy_websocket::{
 
 fn main() {
     App::new()
-        .add_plugins((MinimalPlugins, LogPlugin::default(), WebSocketPlugin))
+        .add_plugins((
+            MinimalPlugins,
+            LogPlugin::default(),
+            WebSocketPlugin,
+            WebSocketServerPlugin,
+        ))
         .add_systems(Startup, setup)
         .add_systems(Update, on_message)
         .run();

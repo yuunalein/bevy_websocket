@@ -1,6 +1,7 @@
 use std::net::TcpStream;
 
 use bevy::prelude::*;
+use tungstenite::stream::MaybeTlsStream;
 use tungstenite::Error;
 use tungstenite::Utf8Bytes;
 use tungstenite::{protocol::frame::Frame, Bytes};
@@ -9,7 +10,7 @@ use tungstenite::{Message, WebSocket};
 /// Write data to a conversation.
 #[derive(Resource)]
 pub struct WebSocketWriter<'s> {
-    pub(crate) stream: &'s mut WebSocket<TcpStream>,
+    pub(crate) stream: &'s mut WebSocket<MaybeTlsStream<TcpStream>>,
 }
 impl WebSocketWriter<'_> {
     /// Send a message to the conversation.
